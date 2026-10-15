@@ -1,0 +1,16 @@
+{
+    "name": "FinitePrizePool.Persistence",
+    "rootNamespace": "",
+    "references": [
+        "GUID:bc883ceee04114eaab61ac4dbeb34e5b"
+    ],
+    "includePlatforms": [],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": true,
+    "defineConstraints": [],
+    "versionDefines": [],
+    "noEngineReferences": false
+}
