@@ -1,4 +1,3 @@
-
 using System;
 using System.IO;
 using System.Text;
@@ -27,7 +26,7 @@ namespace FinitePrizePool.Persistence
         public bool HasSave()
         {
             return File.Exists(_savePath)
-                || File.Exists(_backupPath);
+                   || File.Exists(_backupPath);
         }
 
         public void Save(GameSaveData data)
@@ -48,10 +47,10 @@ namespace FinitePrizePool.Persistence
             byte[] bytes = new UTF8Encoding(false).GetBytes(json);
 
             using (FileStream stream = new FileStream(
-                _tempPath,
-                FileMode.Create,
-                FileAccess.Write,
-                FileShare.None))
+                       _tempPath,
+                       FileMode.Create,
+                       FileAccess.Write,
+                       FileShare.None))
             {
                 stream.Write(bytes, 0, bytes.Length);
                 stream.Flush();
@@ -149,11 +148,9 @@ namespace FinitePrizePool.Persistence
             }
             catch (IOException)
             {
-                
             }
             catch (UnauthorizedAccessException)
             {
-                
             }
         }
     }

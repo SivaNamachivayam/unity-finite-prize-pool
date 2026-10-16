@@ -1,4 +1,3 @@
-
 using System;
 using System.Collections.Generic;
 using System.IO;
@@ -11,9 +10,24 @@ namespace FinitePrizePool.Persistence
         private readonly JsonSaveStorage _storage;
         private GameSaveData _lastSavedData;
 
-        public JsonDealPersistence(JsonSaveStorage storage = null)
+        public JsonDealPersistence()
         {
-            _storage = storage ?? new JsonSaveStorage();
+            _storage = new JsonSaveStorage();
+        }
+
+        public JsonDealPersistence(string savePath)
+        {
+            if (string.IsNullOrWhiteSpace(savePath))
+                throw new ArgumentException(
+                    "Save path is required.", nameof(savePath));
+
+            _storage = new JsonSaveStorage(savePath);
+        }
+
+        public JsonDealPersistence(JsonSaveStorage storage)
+        {
+            _storage = storage ??
+                       throw new ArgumentNullException(nameof(storage));
         }
 
         public void SaveState(
@@ -21,16 +35,28 @@ namespace FinitePrizePool.Persistence
             IReadOnlyList<DealRecord> deals,
             IReadOnlyList<SpinRecord> spinHistory)
         {
-            if (players == null)
-                throw new ArgumentNullException(nameof(players));
+            if (players == null || deals == null || spinHistory == null)
+                throw new ArgumentNullException(
+                    "Save collections cannot be null.");
 
-            if (deals == null)
-                throw new ArgumentNullException(nameof(deals));
+            GameSaveData data =
+                _lastSavedData ?? _storage.Load() ?? new GameSaveData();
 
-            if (spinHistory == null)
-                throw new ArgumentNullException(nameof(spinHistory));
+            if (data.Players == null)
+                data.Players = new List<PlayerSaveData>();
 
-            GameSaveData data = new GameSaveData();
+            if (data.Deals == null)
+                data.Deals = new List<DealSaveData>();
+
+            if (data.SpinHistory == null)
+                data.SpinHistory = new List<SpinSaveData>();
+
+            if (data.RetirementHistory == null)
+                data.RetirementHistory = new List<DealRetirementSaveData>();
+
+            data.Players.Clear();
+            data.Deals.Clear();
+            data.SpinHistory.Clear();
 
             foreach (PlayerRecord player in players)
             {
@@ -50,7 +76,7 @@ namespace FinitePrizePool.Persistence
                 if (deal == null)
                     throw new InvalidDataException("Null deal.");
 
-                DealSaveData savedDeal = new DealSaveData
+                var savedDeal = new DealSaveData
                 {
                     DealId = deal.DealId,
                     ConfigVersion = deal.ConfigVersion,
@@ -85,7 +111,7 @@ namespace FinitePrizePool.Persistence
             foreach (SpinRecord spin in spinHistory)
             {
                 if (spin == null)
-                    throw new InvalidDataException("Null spin record.");
+                    throw new InvalidDataException("Null spin.");
 
                 data.SpinHistory.Add(new SpinSaveData
                 {
@@ -113,20 +139,22 @@ namespace FinitePrizePool.Persistence
             spinHistory = new List<SpinRecord>();
 
             GameSaveData data = _storage.Load();
+            _lastSavedData = data;
 
             if (data == null)
-            {
-                _lastSavedData = null;
                 return;
-            }
 
-            if (data.Players == null ||
-                data.Deals == null ||
-                data.SpinHistory == null)
-            {
-                throw new InvalidDataException(
-                    "Save data is missing required collections.");
-            }
+            if (data.Players == null)
+                data.Players = new List<PlayerSaveData>();
+
+            if (data.Deals == null)
+                data.Deals = new List<DealSaveData>();
+
+            if (data.SpinHistory == null)
+                data.SpinHistory = new List<SpinSaveData>();
+
+            if (data.RetirementHistory == null)
+                data.RetirementHistory = new List<DealRetirementSaveData>();
 
             foreach (PlayerSaveData player in data.Players)
             {
@@ -146,7 +174,7 @@ namespace FinitePrizePool.Persistence
                 if (savedDeal == null)
                     throw new InvalidDataException("Null saved deal.");
 
-                List<PrizeTicket> tickets = new List<PrizeTicket>();
+                var tickets = new List<PrizeTicket>();
 
                 if (savedDeal.Tickets != null)
                 {
@@ -195,8 +223,92 @@ namespace FinitePrizePool.Persistence
                     ResultShown = savedSpin.ResultShown
                 });
             }
+        }
 
+        public void SaveRetirementHistory(
+            IReadOnlyList<DealRetirementRecord> retirementHistory)
+        {
+            if (retirementHistory == null)
+                throw new ArgumentNullException(nameof(retirementHistory));
+
+            GameSaveData data =
+                _lastSavedData ?? _storage.Load() ?? new GameSaveData();
+
+            if (data.Players == null)
+                data.Players = new List<PlayerSaveData>();
+
+            if (data.Deals == null)
+                data.Deals = new List<DealSaveData>();
+
+            if (data.SpinHistory == null)
+                data.SpinHistory = new List<SpinSaveData>();
+
+            var savedHistory = new List<DealRetirementSaveData>();
+
+            foreach (DealRetirementRecord record in retirementHistory)
+            {
+                if (record == null)
+                    throw new InvalidDataException("Null retirement audit.");
+
+                savedHistory.Add(new DealRetirementSaveData
+                {
+                    AuditId = record.AuditId,
+                    RetiredDealId = record.RetiredDealId,
+                    ReplacementDealId = record.ReplacementDealId,
+                    Reason = record.Reason,
+                    RetiredAtUtc = record.RetiredAtUtc,
+                    OldConfigVersion = record.OldConfigVersion,
+                    NewConfigVersion = record.NewConfigVersion,
+                    Mode = record.Mode,
+                    BetCents = record.BetCents,
+                    TicketsUsed = record.TicketsUsed,
+                    TicketsRemaining = record.TicketsRemaining,
+                    TotalWagersCents = record.TotalWagersCents,
+                    TotalPayoutsCents = record.TotalPayoutsCents,
+                    ActualRtpPercent = record.ActualRtpPercent,
+                    ReachedTargetRtp = record.ReachedTargetRtp
+                });
+            }
+
+            data.RetirementHistory = savedHistory;
+            _storage.Save(data);
             _lastSavedData = data;
+        }
+
+        public List<DealRetirementRecord> LoadRetirementHistory()
+        {
+            GameSaveData data = _lastSavedData ?? _storage.Load();
+            var result = new List<DealRetirementRecord>();
+
+            if (data == null || data.RetirementHistory == null)
+                return result;
+
+            foreach (DealRetirementSaveData saved in data.RetirementHistory)
+            {
+                if (saved == null)
+                    continue;
+
+                result.Add(new DealRetirementRecord
+                {
+                    AuditId = saved.AuditId,
+                    RetiredDealId = saved.RetiredDealId,
+                    ReplacementDealId = saved.ReplacementDealId,
+                    Reason = saved.Reason,
+                    RetiredAtUtc = saved.RetiredAtUtc,
+                    OldConfigVersion = saved.OldConfigVersion,
+                    NewConfigVersion = saved.NewConfigVersion,
+                    Mode = saved.Mode,
+                    BetCents = saved.BetCents,
+                    TicketsUsed = saved.TicketsUsed,
+                    TicketsRemaining = saved.TicketsRemaining,
+                    TotalWagersCents = saved.TotalWagersCents,
+                    TotalPayoutsCents = saved.TotalPayoutsCents,
+                    ActualRtpPercent = saved.ActualRtpPercent,
+                    ReachedTargetRtp = saved.ReachedTargetRtp
+                });
+            }
+
+            return result;
         }
 
         public void MarkResultShown(string spinId)
@@ -212,34 +324,15 @@ namespace FinitePrizePool.Persistence
             if (data.SpinHistory == null)
                 throw new InvalidDataException("Spin history is missing.");
 
-            SpinSaveData target = null;
-
-            foreach (SpinSaveData spin in data.SpinHistory)
-            {
-                if (spin != null && spin.SpinId == spinId)
-                {
-                    target = spin;
-                    break;
-                }
-            }
+            SpinSaveData target = data.SpinHistory.Find(spin => spin != null && spin.SpinId == spinId);
 
             if (target == null)
                 throw new KeyNotFoundException(
-                    "Spin record was not found: " + spinId);
+                    "Spin record not found: " + spinId);
 
-            bool previousValue = target.ResultShown;
             target.ResultShown = true;
-
-            try
-            {
-                _storage.Save(data);
-                _lastSavedData = data;
-            }
-            catch
-            {
-                target.ResultShown = previousValue;
-                throw;
-            }
+            _storage.Save(data);
+            _lastSavedData = data;
         }
     }
 }

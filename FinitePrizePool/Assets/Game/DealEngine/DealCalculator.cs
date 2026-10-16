@@ -1,4 +1,3 @@
-
 using System;
 
 namespace FinitePrizePool.DealEngine
@@ -52,6 +51,26 @@ namespace FinitePrizePool.DealEngine
         }
     }
 
+    public readonly struct DealPlan
+    {
+        public int PairedCycleCount { get; }
+        public int PrizeTickets { get; }
+        public int LosingTickets { get; }
+        public DealCalculation Calculation { get; }
+
+        public DealPlan(
+            int pairedCycleCount,
+            int prizeTickets,
+            int losingTickets,
+            DealCalculation calculation)
+        {
+            PairedCycleCount = pairedCycleCount;
+            PrizeTickets = prizeTickets;
+            LosingTickets = losingTickets;
+            Calculation = calculation;
+        }
+    }
+
     public static class DealCalculator
     {
         public static DealCalculation Calculate(
@@ -85,6 +104,79 @@ namespace FinitePrizePool.DealEngine
                 totalPayoutsCents,
                 totalTickets,
                 paidSpins);
+        }
+
+        public static DealPlan CalculateMinimumPairedCyclePlan(
+            long betCents,
+            long payoutPerPairedCycleCents,
+            int prizeTicketsPerPairedCycle)
+        {
+            if (betCents <= 0)
+                throw new ArgumentOutOfRangeException(
+                    nameof(betCents));
+
+            if (payoutPerPairedCycleCents <= 0)
+                throw new ArgumentOutOfRangeException(
+                    nameof(payoutPerPairedCycleCents));
+
+            if (prizeTicketsPerPairedCycle <= 0)
+                throw new ArgumentOutOfRangeException(
+                    nameof(prizeTicketsPerPairedCycle));
+
+            long numerator = checked(
+                10L * payoutPerPairedCycleCents);
+
+            long denominator = checked(9L * betCents);
+
+            long gcd = GreatestCommonDivisor(
+                numerator,
+                denominator);
+
+            long cycles = denominator / gcd;
+
+            long ticketsPerPlan = numerator / gcd;
+
+            long prizes = checked(
+                cycles * prizeTicketsPerPairedCycle);
+
+            if (ticketsPerPlan < prizes)
+            {
+                throw new InvalidOperationException(
+                    "Invalid prize bag configuration: the required " +
+                    "number of prize tickets exceeds the total ticket " +
+                    "count for an exact 90% RTP deal.");
+            }
+
+            long losses = ticketsPerPlan - prizes;
+
+            if (cycles > int.MaxValue ||
+                prizes > int.MaxValue ||
+                losses > int.MaxValue ||
+                ticketsPerPlan > int.MaxValue)
+            {
+                throw new InvalidOperationException(
+                    "The calculated deal exceeds supported limits.");
+            }
+
+            long totalWagers = checked(
+                betCents * ticketsPerPlan);
+
+            long totalPayouts = checked(
+                payoutPerPairedCycleCents * cycles);
+
+            DealCalculation calculation = Calculate(
+                betCents,
+                (int)prizes,
+                totalPayouts,
+                (int)ticketsPerPlan);
+
+            ValidateExact90Percent(calculation);
+
+            return new DealPlan(
+                (int)cycles,
+                (int)prizes,
+                (int)losses,
+                calculation);
         }
 
         public static void ValidateExact90Percent(
@@ -155,6 +247,20 @@ namespace FinitePrizePool.DealEngine
                 paidSpins,
                 totalPayoutsCents,
                 ticketAwardsCents.Length);
+        }
+
+        private static long GreatestCommonDivisor(
+            long a,
+            long b)
+        {
+            while (b != 0)
+            {
+                long remainder = a % b;
+                a = b;
+                b = remainder;
+            }
+
+            return a;
         }
     }
 }

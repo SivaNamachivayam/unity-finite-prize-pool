@@ -1,4 +1,3 @@
-
 using System;
 using System.Collections.Generic;
 using System.Text;
@@ -29,6 +28,7 @@ namespace FinitePrizePool.DealEngine
             public long TotalPayoutsCents;
             public decimal OverallRtpPercent;
             public bool OverallExactly90Percent;
+
             public readonly List<DealResult> Results =
                 new List<DealResult>();
 

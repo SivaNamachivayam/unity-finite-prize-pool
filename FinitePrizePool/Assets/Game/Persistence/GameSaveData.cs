@@ -17,6 +17,9 @@ namespace FinitePrizePool.Persistence
 
         public List<SpinSaveData> SpinHistory =
             new List<SpinSaveData>();
+
+        public List<DealRetirementSaveData> RetirementHistory =
+            new List<DealRetirementSaveData>();
     }
 
     [Serializable]
@@ -63,5 +66,30 @@ namespace FinitePrizePool.Persistence
         public long WagerCents;
         public long AwardCents;
         public bool ResultShown;
+    }
+
+    [Serializable]
+    public class DealRetirementSaveData
+    {
+        public string AuditId;
+        public string RetiredDealId;
+        public string ReplacementDealId;
+        public string Reason;
+        public string RetiredAtUtc;
+
+        public string OldConfigVersion;
+        public string NewConfigVersion;
+
+        public GameMode Mode;
+        public long BetCents;
+
+        public int TicketsUsed;
+        public int TicketsRemaining;
+
+        public long TotalWagersCents;
+        public long TotalPayoutsCents;
+
+        public double ActualRtpPercent;
+        public bool ReachedTargetRtp;
     }
 }

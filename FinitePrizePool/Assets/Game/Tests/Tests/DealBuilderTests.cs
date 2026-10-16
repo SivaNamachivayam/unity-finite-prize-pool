@@ -1,4 +1,3 @@
-
 using System;
 using System.Reflection;
 using NUnit.Framework;
@@ -59,6 +58,7 @@ public class DealBuilderTests
             DealBuilder.ActivateDeal(deal));
     }
 
+
     [Test]
     public void ActivateDeal_ActivatesReadyDealWithOneLossTicket()
     {
@@ -67,7 +67,9 @@ public class DealBuilderTests
 
         deal.Tickets = new[]
         {
-            CreateTicket("ticket-001", PrizeType.Loss, 0, 1)
+            CreateTicket("ticket-001", PrizeType.Regular, 135, 1),
+            CreateTicket("ticket-002", PrizeType.Big, 135, 1),
+            CreateTicket("ticket-003", PrizeType.Loss, 0, 1)
         };
 
         DealBuilder.ActivateDeal(deal);
@@ -75,6 +77,7 @@ public class DealBuilderTests
         Assert.AreEqual(DealState.Active, deal.State);
         Assert.AreEqual(0, deal.CurrentTicketPosition);
     }
+
 
     [Test]
     public void SecureShuffle_RejectsNullArray()

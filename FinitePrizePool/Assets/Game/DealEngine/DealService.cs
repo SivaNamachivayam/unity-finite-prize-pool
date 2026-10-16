@@ -1,6 +1,6 @@
-
 using System;
 using System.Collections.Generic;
+using UnityEngine;
 
 namespace FinitePrizePool.DealEngine
 {
@@ -15,24 +15,44 @@ namespace FinitePrizePool.DealEngine
         private readonly Dictionary<string, DealRecord> _activeDeals =
             new Dictionary<string, DealRecord>();
 
+        private readonly Dictionary<string, DealRecord> _readyDeals =
+            new Dictionary<string, DealRecord>();
+
         private readonly List<SpinRecord> _spinHistory =
             new List<SpinRecord>();
 
+        private readonly List<DealRetirementRecord> _retirementHistory =
+            new List<DealRetirementRecord>();
+
         private readonly IDealPersistence _persistence;
 
-        public DealService(IDealPersistence persistence = null)
+        private readonly Func<GameMode, long, DealRecord>
+            _replacementDealFactory;
+
+        public DealService(
+            IDealPersistence persistence = null,
+            Func<GameMode, long, DealRecord> replacementDealFactory = null)
         {
             _persistence = persistence;
+            _replacementDealFactory = replacementDealFactory;
 
-            if (_persistence != null)
-            {
-                _persistence.LoadState(
-                    out List<PlayerRecord> players,
-                    out List<DealRecord> deals,
-                    out List<SpinRecord> spinHistory);
+            if (_persistence == null)
+                return;
 
-                RestoreState(players, deals, spinHistory);
-            }
+            _persistence.LoadState(
+                out List<PlayerRecord> players,
+                out List<DealRecord> deals,
+                out List<SpinRecord> spins);
+
+            RestoreState(players, deals, spins);
+
+            List<DealRetirementRecord> audits =
+                _persistence.LoadRetirementHistory();
+
+            if (audits != null)
+                _retirementHistory.AddRange(audits);
+
+            EnsureReadySuccessorsForActiveDeals();
         }
 
         public void RestoreState(
@@ -49,30 +69,24 @@ namespace FinitePrizePool.DealEngine
             if (spinHistory == null)
                 throw new ArgumentNullException(nameof(spinHistory));
 
-            var restoredPlayers =
-                new Dictionary<string, PlayerRecord>();
-
-            var restoredDeals =
-                new Dictionary<string, DealRecord>();
-
-            var restoredActiveDeals =
-                new Dictionary<string, DealRecord>();
-
-            var restoredHistory = new List<SpinRecord>();
-            var spinIds = new HashSet<string>();
+            _players.Clear();
+            _dealsById.Clear();
+            _activeDeals.Clear();
+            _readyDeals.Clear();
+            _spinHistory.Clear();
 
             foreach (PlayerRecord player in players)
             {
                 if (player == null ||
                     string.IsNullOrWhiteSpace(player.PlayerId) ||
                     player.BalanceCents < 0 ||
-                    restoredPlayers.ContainsKey(player.PlayerId))
+                    _players.ContainsKey(player.PlayerId))
                 {
                     throw new InvalidOperationException(
                         "Invalid or duplicate player in saved data.");
                 }
 
-                restoredPlayers.Add(player.PlayerId, player);
+                _players.Add(player.PlayerId, player);
             }
 
             foreach (DealRecord deal in deals)
@@ -83,21 +97,29 @@ namespace FinitePrizePool.DealEngine
 
                 DealValidator.ValidateStructure(deal);
 
-                if (restoredDeals.ContainsKey(deal.DealId))
+                if (_dealsById.ContainsKey(deal.DealId))
                     throw new InvalidOperationException(
                         "Duplicate deal ID in saved data.");
 
-                restoredDeals.Add(deal.DealId, deal);
+                _dealsById.Add(deal.DealId, deal);
+
+                string key = GetDealKey(deal.Mode, deal.BetCents);
 
                 if (deal.State == DealState.Active)
                 {
-                    string key = GetDealKey(deal.Mode, deal.BetCents);
-
-                    if (restoredActiveDeals.ContainsKey(key))
+                    if (_activeDeals.ContainsKey(key))
                         throw new InvalidOperationException(
                             "Multiple active deals exist for the same mode and bet.");
 
-                    restoredActiveDeals.Add(key, deal);
+                    _activeDeals.Add(key, deal);
+                }
+                else if (deal.State == DealState.Ready)
+                {
+                    if (_readyDeals.ContainsKey(key))
+                        throw new InvalidOperationException(
+                            "Multiple ready deals exist for the same mode and bet.");
+
+                    _readyDeals.Add(key, deal);
                 }
             }
 
@@ -110,46 +132,29 @@ namespace FinitePrizePool.DealEngine
                     spin.TicketPosition < 0 ||
                     spin.WagerCents <= 0 ||
                     spin.AwardCents < 0 ||
-                    !spinIds.Add(spin.SpinId))
+                    !_dealsById.TryGetValue(
+                        spin.DealId, out DealRecord deal) ||
+                    !_players.ContainsKey(spin.PlayerId) ||
+                    deal.Tickets == null ||
+                    spin.TicketPosition >= deal.Tickets.Length ||
+                    deal.Tickets[spin.TicketPosition] == null ||
+                    deal.Tickets[spin.TicketPosition].AwardCents
+                    != spin.AwardCents ||
+                    deal.BetCents != spin.WagerCents)
                 {
                     throw new InvalidOperationException(
-                        "Invalid or duplicate spin record in saved data.");
+                        "Invalid spin record in saved data.");
                 }
 
-                if (!restoredDeals.TryGetValue(
-                        spin.DealId, out DealRecord spinDeal) ||
-                    !restoredPlayers.ContainsKey(spin.PlayerId))
+                foreach (SpinRecord existing in _spinHistory)
                 {
-                    throw new InvalidOperationException(
-                        "Spin record references a missing deal or player.");
+                    if (existing.SpinId == spin.SpinId)
+                        throw new InvalidOperationException(
+                            "Duplicate spin ID in saved data.");
                 }
 
-                if (spin.TicketPosition >= spinDeal.Tickets.Length ||
-                    spinDeal.Tickets[spin.TicketPosition].AwardCents != spin.AwardCents ||
-                    spinDeal.BetCents != spin.WagerCents)
-                {
-                    throw new InvalidOperationException(
-                        "Spin record does not match its saved ticket.");
-                }
-
-                restoredHistory.Add(spin);
+                _spinHistory.Add(spin);
             }
-
-            _players.Clear();
-            _dealsById.Clear();
-            _activeDeals.Clear();
-            _spinHistory.Clear();
-
-            foreach (var item in restoredPlayers)
-                _players.Add(item.Key, item.Value);
-
-            foreach (var item in restoredDeals)
-                _dealsById.Add(item.Key, item.Value);
-
-            foreach (var item in restoredActiveDeals)
-                _activeDeals.Add(item.Key, item.Value);
-
-            _spinHistory.AddRange(restoredHistory);
         }
 
         public void RegisterPlayer(
@@ -160,12 +165,12 @@ namespace FinitePrizePool.DealEngine
             if (string.IsNullOrWhiteSpace(playerId))
                 throw new ArgumentException("Player ID is required.");
 
-            if (_players.ContainsKey(playerId))
-                throw new InvalidOperationException("Player already exists.");
-
             if (startingBalanceCents < 0)
                 throw new ArgumentOutOfRangeException(
                     nameof(startingBalanceCents));
+
+            if (_players.ContainsKey(playerId))
+                return;
 
             var player = new PlayerRecord
             {
@@ -187,13 +192,32 @@ namespace FinitePrizePool.DealEngine
             }
         }
 
+        public void AddBalance(string playerId, long amountCents)
+        {
+            if (amountCents <= 0)
+                throw new ArgumentOutOfRangeException(nameof(amountCents));
+
+            if (!_players.TryGetValue(playerId, out PlayerRecord player))
+                throw new KeyNotFoundException("Player was not found.");
+
+            long oldBalance = player.BalanceCents;
+
+            try
+            {
+                player.BalanceCents = checked(oldBalance + amountCents);
+                SaveCurrentState();
+            }
+            catch
+            {
+                player.BalanceCents = oldBalance;
+                throw;
+            }
+        }
+
         public void RegisterActiveDeal(DealRecord deal)
         {
             if (deal == null)
                 throw new ArgumentNullException(nameof(deal));
-
-            if (string.IsNullOrWhiteSpace(deal.DealId))
-                throw new ArgumentException("Deal ID is required.");
 
             if (deal.State != DealState.Active)
                 throw new InvalidOperationException(
@@ -201,8 +225,12 @@ namespace FinitePrizePool.DealEngine
 
             DealValidator.ValidateStructure(deal);
 
-            if (_dealsById.ContainsKey(deal.DealId))
-                throw new InvalidOperationException("Deal ID already exists.");
+            if (string.IsNullOrWhiteSpace(deal.DealId) ||
+                _dealsById.ContainsKey(deal.DealId))
+            {
+                throw new InvalidOperationException(
+                    "Deal ID is missing or already exists.");
+            }
 
             string key = GetDealKey(deal.Mode, deal.BetCents);
 
@@ -210,8 +238,23 @@ namespace FinitePrizePool.DealEngine
                 throw new InvalidOperationException(
                     "An active deal already exists for this mode and bet.");
 
+            DealRecord readySuccessor = null;
+
+            if (_replacementDealFactory != null &&
+                !_readyDeals.ContainsKey(key))
+            {
+                readySuccessor = CreateReadySuccessor(
+                    deal, deal.Mode, deal.BetCents);
+            }
+
             _dealsById.Add(deal.DealId, deal);
             _activeDeals.Add(key, deal);
+
+            if (readySuccessor != null)
+            {
+                _dealsById.Add(readySuccessor.DealId, readySuccessor);
+                _readyDeals.Add(key, readySuccessor);
+            }
 
             try
             {
@@ -221,6 +264,13 @@ namespace FinitePrizePool.DealEngine
             {
                 _dealsById.Remove(deal.DealId);
                 _activeDeals.Remove(key);
+
+                if (readySuccessor != null)
+                {
+                    _dealsById.Remove(readySuccessor.DealId);
+                    _readyDeals.Remove(key);
+                }
+
                 throw;
             }
         }
@@ -259,36 +309,48 @@ namespace FinitePrizePool.DealEngine
                     "Deal has no available tickets.");
             }
 
-            PrizeTicket ticket = deal.Tickets[deal.CurrentTicketPosition];
+            PrizeTicket ticket =
+                deal.Tickets[deal.CurrentTicketPosition];
 
             if (ticket == null || ticket.AwardCents < 0)
                 throw new SpinRejectedException("Invalid ticket.");
 
-            long nextBalance;
-            long nextWagers;
-            long nextPayouts;
+            long nextBalance = checked(
+                player.BalanceCents - betCents + ticket.AwardCents);
 
-            try
-            {
-                nextBalance = checked(
-                    player.BalanceCents - betCents + ticket.AwardCents);
+            long nextWagers = checked(
+                deal.TotalWagersCents + betCents);
 
-                nextWagers = checked(deal.TotalWagersCents + betCents);
-
-                nextPayouts = checked(
-                    deal.TotalPayoutsCents + ticket.AwardCents);
-            }
-            catch (OverflowException)
-            {
-                throw new SpinRejectedException(
-                    "Spin totals exceeded the supported limit.");
-            }
+            long nextPayouts = checked(
+                deal.TotalPayoutsCents + ticket.AwardCents);
 
             int oldPosition = deal.CurrentTicketPosition;
             DealState oldState = deal.State;
             long oldBalance = player.BalanceCents;
             long oldWagers = deal.TotalWagersCents;
             long oldPayouts = deal.TotalPayoutsCents;
+
+            bool completed = oldPosition + 1 == deal.Tickets.Length;
+
+            DealRecord readySuccessor = null;
+            DealRecord nextReadySuccessor = null;
+
+            if (completed)
+            {
+                if (!_readyDeals.TryGetValue(key, out readySuccessor) ||
+                    readySuccessor == null ||
+                    readySuccessor.State != DealState.Ready)
+                {
+                    throw new SpinRejectedException(
+                        "No verified Ready successor is available.");
+                }
+
+                if (_replacementDealFactory != null)
+                {
+                    nextReadySuccessor = CreateReadySuccessor(
+                        readySuccessor, mode, betCents);
+                }
+            }
 
             var record = new SpinRecord
             {
@@ -306,18 +368,40 @@ namespace FinitePrizePool.DealEngine
             deal.TotalPayoutsCents = nextPayouts;
             deal.CurrentTicketPosition = oldPosition + 1;
 
-            bool completed =
-                deal.CurrentTicketPosition == deal.Tickets.Length;
+            Debug.Log(
+                $"[Deal Progress] Deal ID: {deal.DealId} | " +
+                $"Used: {deal.CurrentTicketPosition}/{deal.Tickets.Length} | " +
+                $"Remaining: {deal.Tickets.Length - deal.CurrentTicketPosition}");
 
             if (completed)
                 deal.State = DealState.Completed;
 
             _spinHistory.Add(record);
 
+            bool successorActivated = false;
+            bool nextSuccessorAdded = false;
+
             try
             {
                 if (completed)
+                {
                     _activeDeals.Remove(key);
+                    _readyDeals.Remove(key);
+
+                    readySuccessor.State = DealState.Active;
+                    _activeDeals.Add(key, readySuccessor);
+                    successorActivated = true;
+
+                    if (nextReadySuccessor != null)
+                    {
+                        _dealsById.Add(
+                            nextReadySuccessor.DealId,
+                            nextReadySuccessor);
+
+                        _readyDeals.Add(key, nextReadySuccessor);
+                        nextSuccessorAdded = true;
+                    }
+                }
 
                 SaveCurrentState();
             }
@@ -330,6 +414,21 @@ namespace FinitePrizePool.DealEngine
                 deal.State = oldState;
                 _spinHistory.Remove(record);
 
+                if (nextSuccessorAdded && nextReadySuccessor != null)
+                {
+                    _dealsById.Remove(nextReadySuccessor.DealId);
+                    _readyDeals.Remove(key);
+                }
+
+                _readyDeals.Remove(key);
+                _activeDeals.Remove(key);
+
+                if (successorActivated)
+                    readySuccessor.State = DealState.Ready;
+
+                if (readySuccessor != null)
+                    _readyDeals[key] = readySuccessor;
+
                 if (oldState == DealState.Active)
                     _activeDeals[key] = deal;
 
@@ -339,13 +438,262 @@ namespace FinitePrizePool.DealEngine
             return record;
         }
 
+        public bool RetireActiveDeal(
+            GameMode mode,
+            long betCents,
+            string reason)
+        {
+            if (string.IsNullOrWhiteSpace(reason))
+                throw new ArgumentException(
+                    "Retirement reason is required.");
+
+            string key = GetDealKey(mode, betCents);
+
+            if (!_activeDeals.TryGetValue(key, out DealRecord deal))
+                return false;
+
+            if (!_readyDeals.TryGetValue(key, out DealRecord replacement) ||
+                replacement == null ||
+                replacement.State != DealState.Ready)
+            {
+                throw new InvalidOperationException(
+                    "No verified Ready successor is available for retirement.");
+            }
+
+            DealRecord nextReadySuccessor = null;
+
+            if (_replacementDealFactory != null)
+            {
+                nextReadySuccessor = CreateReadySuccessor(
+                    replacement, mode, betCents);
+            }
+
+            int ticketsUsed = deal.CurrentTicketPosition;
+            int ticketsRemaining = deal.Tickets.Length - ticketsUsed;
+
+            double actualRtp = deal.TotalWagersCents > 0
+                ? deal.TotalPayoutsCents * 100.0 /
+                  deal.TotalWagersCents
+                : 0.0;
+
+            var audit = new DealRetirementRecord
+            {
+                AuditId = Guid.NewGuid().ToString("N"),
+                RetiredDealId = deal.DealId,
+                ReplacementDealId = replacement.DealId,
+                Reason = reason.Trim(),
+                RetiredAtUtc = DateTime.UtcNow.ToString("O"),
+                OldConfigVersion = deal.ConfigVersion,
+                NewConfigVersion = replacement.ConfigVersion,
+                Mode = deal.Mode,
+                BetCents = deal.BetCents,
+                TicketsUsed = ticketsUsed,
+                TicketsRemaining = ticketsRemaining,
+                TotalWagersCents = deal.TotalWagersCents,
+                TotalPayoutsCents = deal.TotalPayoutsCents,
+                ActualRtpPercent = actualRtp,
+                ReachedTargetRtp = false
+            };
+
+            DealState oldState = deal.State;
+
+            deal.State = DealState.Retired;
+            _activeDeals.Remove(key);
+            _readyDeals.Remove(key);
+
+            replacement.State = DealState.Active;
+            _activeDeals.Add(key, replacement);
+
+            if (nextReadySuccessor != null)
+            {
+                _dealsById.Add(
+                    nextReadySuccessor.DealId, nextReadySuccessor);
+
+                _readyDeals.Add(key, nextReadySuccessor);
+            }
+
+            _retirementHistory.Add(audit);
+
+            try
+            {
+                SaveCurrentState();
+
+                if (_persistence != null)
+                    _persistence.SaveRetirementHistory(_retirementHistory);
+            }
+            catch
+            {
+                _retirementHistory.Remove(audit);
+
+                if (nextReadySuccessor != null)
+                {
+                    _dealsById.Remove(nextReadySuccessor.DealId);
+                    _readyDeals.Remove(key);
+                }
+
+                _activeDeals.Remove(key);
+                replacement.State = DealState.Ready;
+                _readyDeals[key] = replacement;
+
+                deal.State = oldState;
+                _activeDeals[key] = deal;
+
+                throw;
+            }
+
+            Debug.Log(
+                $"[Deal Retired] Deal: {deal.DealId} | " +
+                $"Replacement: {replacement.DealId} | " +
+                $"Used: {ticketsUsed} | Remaining: {ticketsRemaining} | " +
+                $"Reason: {reason}");
+
+            return true;
+        }
+
+        private DealRecord CreateReadySuccessor(
+            DealRecord currentDeal,
+            GameMode mode,
+            long betCents)
+        {
+            if (_replacementDealFactory == null)
+                throw new InvalidOperationException(
+                    "Ready successor factory is not configured.");
+
+            DealRecord ready =
+                _replacementDealFactory(mode, betCents);
+
+            if (ready == null)
+                throw new InvalidOperationException(
+                    "Ready successor factory returned null.");
+
+            if (ready.State == DealState.Active)
+                ready.State = DealState.Ready;
+
+            if (ready.State != DealState.Ready ||
+                ready.Mode != mode ||
+                ready.BetCents != betCents ||
+                string.IsNullOrWhiteSpace(ready.DealId) ||
+                (currentDeal != null &&
+                 ready.DealId == currentDeal.DealId) ||
+                _dealsById.ContainsKey(ready.DealId) ||
+                ready.CurrentTicketPosition != 0 ||
+                ready.Tickets == null ||
+                ready.Tickets.Length == 0)
+            {
+                throw new InvalidOperationException(
+                    "Ready successor deal is invalid.");
+            }
+
+            DealValidator.ValidateStructure(ready);
+            return ready;
+        }
+
+        private void EnsureReadySuccessorsForActiveDeals()
+        {
+            if (_replacementDealFactory == null)
+                return;
+
+            bool changed = false;
+
+            List<KeyValuePair<string, DealRecord>> active =
+                new List<KeyValuePair<string, DealRecord>>(_activeDeals);
+
+            foreach (KeyValuePair<string, DealRecord> pair in active)
+            {
+                if (_readyDeals.ContainsKey(pair.Key))
+                    continue;
+
+                DealRecord ready = CreateReadySuccessor(
+                    pair.Value,
+                    pair.Value.Mode,
+                    pair.Value.BetCents);
+
+                _dealsById.Add(ready.DealId, ready);
+                _readyDeals.Add(pair.Key, ready);
+                changed = true;
+            }
+
+            if (changed)
+                SaveCurrentState();
+        }
+
+        public IReadOnlyList<DealRetirementRecord> GetRetirementHistory()
+        {
+            return _retirementHistory.AsReadOnly();
+        }
+
+        public IReadOnlyList<DealRecord> GetCompletedDealHistory()
+        {
+            var completedDeals = new List<DealRecord>();
+
+            foreach (DealRecord deal in _dealsById.Values)
+            {
+                if (deal.State == DealState.Completed)
+                    completedDeals.Add(deal);
+            }
+
+            return completedDeals.AsReadOnly();
+        }
+
+
+        public double GetActualRtpPercent(string dealId)
+        {
+            DealRecord deal = GetDealById(dealId);
+
+            if (deal == null)
+                throw new ArgumentException("Deal not found.", nameof(dealId));
+
+            if (deal.TotalWagersCents <= 0)
+                return 0.0;
+
+            return deal.TotalPayoutsCents * 100.0 /
+                   deal.TotalWagersCents;
+        }
+
+
+        public DealAuditReport GetDealAuditReport(string dealId)
+        {
+            DealRecord deal = GetDealById(dealId);
+
+            if (deal == null)
+                throw new ArgumentException(
+                    "Deal not found.", nameof(dealId));
+
+            int totalTickets = deal.Tickets == null
+                ? 0
+                : deal.Tickets.Length;
+
+            int ticketsUsed = deal.CurrentTicketPosition;
+            int ticketsRemaining = totalTickets - ticketsUsed;
+
+            return new DealAuditReport
+            {
+                DealId = deal.DealId,
+                ConfigVersion = deal.ConfigVersion,
+                Mode = deal.Mode,
+                BetCents = deal.BetCents,
+
+                TotalTickets = totalTickets,
+                TicketsUsed = ticketsUsed,
+                TicketsRemaining = ticketsRemaining,
+
+                TotalWagersCents = deal.TotalWagersCents,
+                TotalPayoutsCents = deal.TotalPayoutsCents,
+
+                ActualRtpPercent = deal.TotalWagersCents > 0
+                    ? deal.TotalPayoutsCents * 100.0 /
+                      deal.TotalWagersCents
+                    : 0.0
+            };
+        }
+
+
         public bool MarkResultShown(string spinId)
         {
             if (string.IsNullOrWhiteSpace(spinId))
                 return false;
 
-            SpinRecord record = _spinHistory.Find(
-                spin => spin.SpinId == spinId);
+            SpinRecord record = GetSpinById(spinId);
 
             if (record == null || record.ResultShown)
                 return false;
@@ -359,17 +707,13 @@ namespace FinitePrizePool.DealEngine
 
         public SpinRecord GetSpinById(string spinId)
         {
-            if (string.IsNullOrWhiteSpace(spinId))
-                return null;
-
-            return _spinHistory.Find(spin => spin.SpinId == spinId);
+            return string.IsNullOrWhiteSpace(spinId)
+                ? null
+                : _spinHistory.Find(x => x.SpinId == spinId);
         }
 
         public SpinRecord GetPendingResult(string playerId)
         {
-            if (string.IsNullOrWhiteSpace(playerId))
-                return null;
-
             for (int i = _spinHistory.Count - 1; i >= 0; i--)
             {
                 SpinRecord spin = _spinHistory[i];
@@ -401,8 +745,11 @@ namespace FinitePrizePool.DealEngine
 
         public long GetPlayerBalance(string playerId)
         {
-            if (!_players.TryGetValue(playerId, out PlayerRecord player))
+            if (!_players.TryGetValue(
+                    playerId, out PlayerRecord player))
+            {
                 throw new KeyNotFoundException("Player was not found.");
+            }
 
             return player.BalanceCents;
         }
@@ -423,9 +770,28 @@ namespace FinitePrizePool.DealEngine
                 new List<SpinRecord>(_spinHistory));
         }
 
-        private static string GetDealKey(GameMode mode, long betCents)
+        private static string GetDealKey(
+            GameMode mode, long betCents)
         {
             return $"{mode}:{betCents}";
         }
+    }
+
+    [Serializable]
+    public sealed class DealAuditReport
+    {
+        public string DealId;
+        public string ConfigVersion;
+        public GameMode Mode;
+        public long BetCents;
+
+        public int TotalTickets;
+        public int TicketsUsed;
+        public int TicketsRemaining;
+
+        public long TotalWagersCents;
+        public long TotalPayoutsCents;
+
+        public double ActualRtpPercent;
     }
 }

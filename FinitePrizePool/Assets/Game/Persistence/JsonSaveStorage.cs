@@ -1,4 +1,3 @@
-
 using System;
 using System.IO;
 using System.Text;
@@ -40,10 +39,10 @@ namespace FinitePrizePool.Persistence
             try
             {
                 using (FileStream stream = new FileStream(
-                    _tempPath,
-                    FileMode.Create,
-                    FileAccess.Write,
-                    FileShare.None))
+                           _tempPath,
+                           FileMode.Create,
+                           FileAccess.Write,
+                           FileShare.None))
                 {
                     byte[] bytes = new UTF8Encoding(false).GetBytes(json);
 
@@ -136,11 +135,9 @@ namespace FinitePrizePool.Persistence
             }
             catch (IOException)
             {
-                
             }
             catch (UnauthorizedAccessException)
             {
-                
             }
         }
     }

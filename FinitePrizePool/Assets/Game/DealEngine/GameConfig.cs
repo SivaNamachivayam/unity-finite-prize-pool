@@ -1,4 +1,3 @@
-
 using System;
 using UnityEngine;
 
@@ -9,18 +8,15 @@ namespace FinitePrizePool.DealEngine
         menuName = "Finite Prize Pool/Game Config")]
     public sealed class GameConfig : ScriptableObject
     {
-        [Header("Configuration")]
-        [SerializeField] private string configVersion = "1.0.0";
+        [Header("Configuration")] [SerializeField]
+        private string configVersion = "1.0.0";
 
-        [Header("Game Rules")]
-        [SerializeField, Range(1, 100)]
+        [Header("Game Rules")] [SerializeField, Range(1, 100)]
         private int targetRtpPercent = 90;
 
-        [SerializeField, Min(1)]
-        private int bonusUnitValueDollars = 1;
+        [SerializeField, Min(1)] private int bonusUnitValueDollars = 1;
 
-        [Header("Bet Levels (Cents)")]
-        [SerializeField]
+        [Header("Bet Levels (Cents)")] [SerializeField]
         private long[] betLevelsCents =
         {
             25, 50, 75, 100, 125,
@@ -29,26 +25,20 @@ namespace FinitePrizePool.DealEngine
             400, 425, 450, 475, 500
         };
 
-        [Header("Prize Bags")]
-        [Tooltip("Enter confirmed Regular prize payout values in cents.")]
-        [SerializeField]
+        [Header("Prize Bags")] [Tooltip("Enter confirmed Regular prize payout values in cents.")] [SerializeField]
         private long[] regularBagPayoutsCents =
             Array.Empty<long>();
 
-        [Tooltip("Enter confirmed Big prize payout values in cents.")]
-        [SerializeField]
+        [Tooltip("Enter confirmed Big prize payout values in cents.")] [SerializeField]
         private long[] bigBagPayoutsCents =
             Array.Empty<long>();
 
-        [Header("Placement Limits")]
-        [SerializeField, Min(1)]
+        [Header("Placement Limits")] [SerializeField, Min(1)]
         private int maxGenerationAttempts = 1000;
 
-        [SerializeField, Min(1)]
-        private int maxConsecutiveLossesMultiplier = 2;
+        [SerializeField, Min(1)] private int maxConsecutiveLossesMultiplier = 2;
 
-        [SerializeField, Min(1)]
-        private int maxPrizeGapMultiplier = 2;
+        [SerializeField, Min(1)] private int maxPrizeGapMultiplier = 2;
 
         public string ConfigVersion => configVersion;
         public int TargetRtpPercent => targetRtpPercent;

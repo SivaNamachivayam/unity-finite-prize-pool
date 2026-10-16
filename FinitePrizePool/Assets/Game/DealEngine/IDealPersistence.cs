@@ -15,5 +15,10 @@ namespace FinitePrizePool.DealEngine
             out List<SpinRecord> spinHistory);
 
         void MarkResultShown(string spinId);
+
+        void SaveRetirementHistory(
+            IReadOnlyList<DealRetirementRecord> retirementHistory);
+
+        List<DealRetirementRecord> LoadRetirementHistory();
     }
 }

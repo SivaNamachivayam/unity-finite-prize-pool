@@ -1,4 +1,3 @@
-
 using System;
 
 namespace FinitePrizePool.DealEngine
@@ -71,5 +70,31 @@ namespace FinitePrizePool.DealEngine
         public long AwardCents;
 
         public bool ResultShown;
+    }
+
+    [Serializable]
+    public sealed class DealRetirementRecord
+    {
+        public string AuditId;
+        public string RetiredDealId;
+        public string ReplacementDealId;
+
+        public string Reason;
+        public string RetiredAtUtc;
+
+        public string OldConfigVersion;
+        public string NewConfigVersion;
+
+        public GameMode Mode;
+        public long BetCents;
+
+        public int TicketsUsed;
+        public int TicketsRemaining;
+
+        public long TotalWagersCents;
+        public long TotalPayoutsCents;
+
+        public double ActualRtpPercent;
+        public bool ReachedTargetRtp;
     }
 }

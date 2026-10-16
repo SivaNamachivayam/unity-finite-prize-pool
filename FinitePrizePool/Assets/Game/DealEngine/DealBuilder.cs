@@ -1,4 +1,3 @@
-
 using System;
 using System.Collections.Generic;
 using System.Security.Cryptography;
@@ -354,7 +353,7 @@ namespace FinitePrizePool.DealEngine
                     nameof(betCents));
         }
 
-       
+
         private static void ValidateExactRtp(DealRecord deal)
         {
             if (deal == null)
@@ -412,6 +411,16 @@ namespace FinitePrizePool.DealEngine
                     "A new deal must start at ticket position zero.");
 
             DealValidator.ValidateStructure(deal);
+
+            if (!TicketPlacementValidator.Validate(
+                    deal.Tickets, out string placementError))
+            {
+                throw new InvalidOperationException(
+                    "Ticket placement validation failed: " +
+                    placementError);
+            }
+
+            ValidateExactRtp(deal);
 
             deal.State = DealState.Active;
         }

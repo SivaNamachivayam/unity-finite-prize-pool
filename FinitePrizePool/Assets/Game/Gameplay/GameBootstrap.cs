@@ -1,24 +1,28 @@
 using System;
 using UnityEngine;
 using FinitePrizePool.DealEngine;
+using FinitePrizePool.Persistence;
 using FinitePrizePool.UI;
 
 namespace FinitePrizePool.Gameplay
 {
-    public sealed class GameBootstrap : MonoBehaviour
+    public class GameBootstrap : MonoBehaviour
     {
-        [Header("Configuration")]
-        [SerializeField] private GameConfig gameConfig;
+        [Header("Game Configuration")] [SerializeField]
+        private GameConfig gameConfig;
 
-        [Header("UI")]
         [SerializeField] private FinitePrizePoolUI gameUI;
 
-        [Header("Demo Player Balances")]
-        [SerializeField, Min(0)]
-        private long playerOneStartingBalanceCents = 10000;
+        [Header("Deal Audit UI")] [SerializeField]
+        private DealAuditPanel dealAuditPanel;
 
-        [SerializeField, Min(0)]
-        private long playerTwoStartingBalanceCents = 10000;
+        [Header("Starting Balance - New Players Only")] [SerializeField]
+        private long player1StartingBalanceCents = 10000;
+
+        [SerializeField] private long player2StartingBalanceCents = 10000;
+
+        [Header("Optional Balance Addition")] [SerializeField]
+        private long balanceToAddCents = 10000;
 
         private DealService _dealService;
 
@@ -29,174 +33,222 @@ namespace FinitePrizePool.Gameplay
 
         private void InitializeGame()
         {
-            if (gameConfig == null)
-            {
-                StopInitialization("GameConfig is not assigned.");
-                return;
-            }
-
-            if (gameUI == null)
-            {
-                StopInitialization("FinitePrizePoolUI is not assigned.");
-                return;
-            }
-
-            if (playerOneStartingBalanceCents < 0 ||
-                playerTwoStartingBalanceCents < 0)
-            {
-                StopInitialization("Starting balance cannot be negative.");
-                return;
-            }
-
-            if (!gameConfig.Validate(out string error))
-            {
-                StopInitialization("Invalid config: " + error);
-                return;
-            }
-
-            if (!gameConfig.HasConfiguredPrizeBags())
-            {
-                StopInitialization(
-                    "Configure Regular and Big payout arrays first.");
-                return;
-            }
-
             try
             {
-                DealBuilder.ValidateGenerationConfig(gameConfig);
-
-                long[] regular = gameConfig.RegularBagPayoutsCents;
-                long[] big = gameConfig.BigBagPayoutsCents;
-
-                long payoutPerCycle = 0;
-
-                checked
-                {
-                    foreach (long payout in regular)
-                        payoutPerCycle += payout;
-
-                    foreach (long payout in big)
-                        payoutPerCycle += payout;
-                }
-
-                int prizeTicketsPerCycle =
-                    checked(regular.Length + big.Length);
-
-                if (payoutPerCycle <= 0 ||
-                    prizeTicketsPerCycle <= 0)
+                if (gameConfig == null || gameUI == null)
                 {
                     StopInitialization(
-                        "Demo payout total and prize ticket count " +
-                        "must be greater than zero.");
+                        "Assign GameConfig and Game UI in the Inspector.");
                     return;
                 }
 
-                _dealService = new DealService();
+                if (!gameConfig.Validate(out string error))
+                {
+                    StopInitialization($"Invalid GameConfig: {error}");
+                    return;
+                }
 
-                _dealService.RegisterPlayer(
-                    "P1", "Player 1",
-                    playerOneStartingBalanceCents);
+                if (!gameConfig.HasConfiguredPrizeBags())
+                {
+                    StopInitialization(
+                        "Configure the Regular and Big prize bags.");
+                    return;
+                }
 
-                _dealService.RegisterPlayer(
-                    "P2", "Player 2",
-                    playerTwoStartingBalanceCents);
+                if (player1StartingBalanceCents < 0 ||
+                    player2StartingBalanceCents < 0)
+                {
+                    StopInitialization(
+                        "Starting balances cannot be negative.");
+                    return;
+                }
 
-                int generatedDeals = 0;
+                IDealPersistence persistence = new JsonDealPersistence();
 
-                foreach (GameMode mode in
-                         Enum.GetValues(typeof(GameMode)))
+                _dealService = new DealService(
+                    persistence,
+                    CreateReplacementDeal
+                );
+
+                EnsurePlayer("P1", player1StartingBalanceCents);
+                EnsurePlayer("P2", player2StartingBalanceCents);
+
+                foreach (GameMode mode in Enum.GetValues(typeof(GameMode)))
                 {
                     foreach (long betCents in gameConfig.BetLevelsCents)
                     {
-                        CalculateDealPlan(
-                            betCents,
-                            payoutPerCycle,
-                            prizeTicketsPerCycle,
-                            out int cycles,
-                            out int losses);
+                        if (_dealService.GetActiveDeal(mode, betCents) == null)
+                        {
+                            DealRecord deal = CreateReplacementDeal(
+                                mode,
+                                betCents
+                            );
 
-                        DealRecord deal = DealBuilder.GenerateDeal(
-                            Guid.NewGuid().ToString("N"),
-                            gameConfig,
-                            mode,
-                            betCents,
-                            cycles,
-                            losses);
-
-                        DealBuilder.ActivateDeal(deal);
-                        _dealService.RegisterActiveDeal(deal);
-
-                        generatedDeals++;
+                            DealBuilder.ActivateDeal(deal);
+                            _dealService.RegisterActiveDeal(deal);
+                        }
                     }
                 }
 
                 gameUI.Initialize(_dealService);
                 gameUI.SetPlayer("P1");
 
-                Debug.Log(
-                    $"Demo initialized. Deals created: {generatedDeals}. " +
-                    "Verify original client payouts before final submission.",
-                    this);
+                if (dealAuditPanel != null)
+                {
+                    dealAuditPanel.Initialize(_dealService);
+                }
+
+                LogBalances();
             }
-            catch (Exception exception)
+            catch (Exception ex)
             {
                 StopInitialization(
-                    "Deal initialization failed: " + exception.Message);
-
-                Debug.LogException(exception, this);
+                    $"Game initialization failed: {ex.Message}");
             }
         }
 
-        private static void CalculateDealPlan(
+        private void EnsurePlayer(
+            string playerId,
+            long startingBalanceCents)
+        {
+            try
+            {
+                _dealService.GetPlayerBalance(playerId);
+            }
+            catch (SpinRejectedException)
+            {
+                _dealService.RegisterPlayer(
+                    playerId,
+                    playerId,
+                    startingBalanceCents
+                );
+            }
+        }
+
+        [ContextMenu("Add Balance To Player 1")]
+        private void AddBalanceToPlayer1()
+        {
+            AddBalanceToPlayer("P1");
+        }
+
+        [ContextMenu("Add Balance To Player 2")]
+        private void AddBalanceToPlayer2()
+        {
+            AddBalanceToPlayer("P2");
+        }
+
+        private void AddBalanceToPlayer(string playerId)
+        {
+            if (_dealService == null)
+            {
+                Debug.LogError(
+                    "Game is not initialized. Enter Play mode first.");
+                return;
+            }
+
+            if (balanceToAddCents <= 0)
+            {
+                Debug.LogError(
+                    "Balance to add must be greater than zero.");
+                return;
+            }
+
+            try
+            {
+                _dealService.AddBalance(
+                    playerId,
+                    balanceToAddCents
+                );
+
+                gameUI.SetPlayer(playerId);
+                LogBalances();
+
+                Debug.Log(
+                    $"Added ${balanceToAddCents / 100f:F2} to {playerId}.");
+            }
+            catch (Exception ex)
+            {
+                Debug.LogError(
+                    $"Could not add balance to {playerId}: {ex.Message}");
+            }
+        }
+
+        private DealRecord CreateReplacementDeal(
+            GameMode mode,
+            long betCents)
+        {
+            long regularPayout =
+                DealCalculator.CalculateTotalPayouts(
+                    gameConfig.RegularBagPayoutsCents);
+
+            long bigPayout =
+                DealCalculator.CalculateTotalPayouts(
+                    gameConfig.BigBagPayoutsCents);
+
+            long payoutPerCycle = checked(
+                regularPayout + bigPayout);
+
+            int prizeTicketsPerCycle =
+                gameConfig.RegularBagPayoutsCents.Length +
+                gameConfig.BigBagPayoutsCents.Length;
+
+            CalculateDealPlan(
+                betCents,
+                payoutPerCycle,
+                prizeTicketsPerCycle,
+                out int pairedCycleCount,
+                out int lossTicketCount);
+
+            DealRecord deal = DealBuilder.GenerateDeal(
+                Guid.NewGuid().ToString("N"),
+                gameConfig,
+                mode,
+                betCents,
+                pairedCycleCount,
+                lossTicketCount);
+
+            Debug.Log(
+                $"Created READY deal | Mode: {mode} | Bet: {betCents} cents | " +
+                $"Tickets: {deal.Tickets.Length}");
+
+            return deal;
+        }
+
+        private void CalculateDealPlan(
             long betCents,
             long payoutPerCycle,
             int prizeTicketsPerCycle,
-            out int cycles,
-            out int losses)
+            out int pairedCycleCount,
+            out int lossTicketCount)
         {
             if (betCents <= 0)
                 throw new ArgumentOutOfRangeException(nameof(betCents));
 
-            long numerator;
-            long denominator;
+            if (payoutPerCycle <= 0 || prizeTicketsPerCycle <= 0)
+                throw new InvalidOperationException(
+                    "Payout and prize ticket count must be positive.");
 
-            checked
-            {
-                numerator = 10L * payoutPerCycle;
-                denominator = 9L * betCents;
-            }
+            long numerator = checked(10L * payoutPerCycle);
+            long denominator = checked(9L * betCents);
 
-            long gcd = GreatestCommonDivisor(
-                numerator, denominator);
+            long gcd = GreatestCommonDivisor(numerator, denominator);
 
-            long requiredCycles = denominator / gcd;
+            long cycles = denominator / gcd;
             long totalTickets = numerator / gcd;
+            long prizeTickets = checked(cycles * prizeTicketsPerCycle);
+            long losses = totalTickets - prizeTickets;
 
-            long prizeTickets;
-            checked
-            {
-                prizeTickets =
-                    requiredCycles * prizeTicketsPerCycle;
-            }
-
-            long lossTickets = totalTickets - prizeTickets;
-
-            if (lossTickets < 0)
+            if (cycles <= 0 ||
+                cycles > int.MaxValue ||
+                losses < 0 ||
+                losses > int.MaxValue)
             {
                 throw new InvalidOperationException(
-                    $"Bet {betCents} cents cannot achieve exact 90% " +
-                    "RTP with the configured prize bag.");
+                    "Could not calculate a valid deal plan.");
             }
 
-            if (requiredCycles > int.MaxValue ||
-                lossTickets > int.MaxValue)
-            {
-                throw new InvalidOperationException(
-                    "Required deal size exceeds supported limits.");
-            }
-
-            cycles = (int)requiredCycles;
-            losses = (int)lossTickets;
+            pairedCycleCount = (int)cycles;
+            lossTicketCount = (int)losses;
         }
 
         private static long GreatestCommonDivisor(long a, long b)
@@ -208,12 +260,21 @@ namespace FinitePrizePool.Gameplay
                 b = remainder;
             }
 
-            return a;
+            return Math.Abs(a);
+        }
+
+        private void LogBalances()
+        {
+            Debug.Log(
+                $"[Balance] P1: " +
+                $"${_dealService.GetPlayerBalance("P1") / 100f:F2} | " +
+                $"P2: ${_dealService.GetPlayerBalance("P2") / 100f:F2}");
         }
 
         private void StopInitialization(string message)
         {
-            Debug.LogError("Finite Prize Pool: " + message, this);
+            Debug.LogError($"[Finite Prize Pool] {message}");
+            enabled = false;
         }
     }
 }
