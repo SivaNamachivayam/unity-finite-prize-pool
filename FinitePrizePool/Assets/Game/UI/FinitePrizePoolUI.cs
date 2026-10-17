@@ -129,9 +129,12 @@ namespace FinitePrizePool.UI
             _playerId = "P1";
         }
 
+
         public void Initialize(DealService service)
         {
             _dealService = service;
+
+            SetPlayer("P1");
 
             if (resultText != null)
                 resultText.text = "--";
@@ -139,12 +142,32 @@ namespace FinitePrizePool.UI
             if (statusText != null)
                 statusText.text = "Ready to spin";
 
-            SetPlayer("P1");
+            if (_dealService != null && resultText != null)
+            {
+                SpinRecord pendingResult =
+                    _dealService.GetPendingResult(_playerId);
+
+                if (pendingResult != null)
+                {
+                    resultText.text = pendingResult.AwardCents > 0
+                        ? $"WIN  ${pendingResult.AwardCents / 100.0:F2}"
+                        : "NO WIN";
+
+                    SetStatus(
+                        pendingResult.AwardCents > 0
+                            ? "Congratulations! You won!"
+                            : "Spin completed");
+
+                    _dealService.MarkResultShown(pendingResult.SpinId);
+                }
+            }
+
             UpdateLabels();
             RefreshDealAudit();
 
             Debug.Log("[UI] Finite Prize Pool UI initialized.");
         }
+
 
         public void SetPlayer(string playerId)
         {
