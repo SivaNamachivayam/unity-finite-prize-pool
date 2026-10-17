@@ -22,6 +22,16 @@ namespace FinitePrizePool.Persistence
             _savePath = path;
             _backupPath = _savePath + ".bak";
             _tempPath = _savePath + ".tmp";
+
+            Debug.Log(
+                $"[SAVE STORAGE INITIALIZED]\n" +
+                $"JSON Location: {_savePath}\n" +
+                $"Backup Location: {_backupPath}");
+        }
+
+        public string GetSavePath()
+        {
+            return _savePath;
         }
 
         public void Save(GameSaveData data)
@@ -44,7 +54,8 @@ namespace FinitePrizePool.Persistence
                            FileAccess.Write,
                            FileShare.None))
                 {
-                    byte[] bytes = new UTF8Encoding(false).GetBytes(json);
+                    byte[] bytes =
+                        new UTF8Encoding(false).GetBytes(json);
 
                     stream.Write(bytes, 0, bytes.Length);
                     stream.Flush();
@@ -53,7 +64,6 @@ namespace FinitePrizePool.Persistence
                 if (File.Exists(_savePath))
                 {
                     File.Copy(_savePath, _backupPath, true);
-
                     File.Copy(_tempPath, _savePath, true);
                     File.Delete(_tempPath);
                 }
@@ -61,9 +71,20 @@ namespace FinitePrizePool.Persistence
                 {
                     File.Move(_tempPath, _savePath);
                 }
+
+                Debug.Log(
+                    $"[SAVE SUCCESS]\n" +
+                    $"JSON Location: {_savePath}\n" +
+                    $"File Exists: {File.Exists(_savePath)}\n" +
+                    $"Saved At: {DateTime.Now:yyyy-MM-dd HH:mm:ss}");
             }
-            catch
+            catch (Exception ex)
             {
+                Debug.LogError(
+                    $"[SAVE FAILED]\n" +
+                    $"JSON Location: {_savePath}\n" +
+                    $"Error: {ex}");
+
                 throw;
             }
         }
@@ -73,11 +94,22 @@ namespace FinitePrizePool.Persistence
             GameSaveData data;
 
             if (TryLoadFile(_savePath, out data))
+            {
+                Debug.Log(
+                    $"[LOAD SUCCESS]\n" +
+                    $"JSON Location: {_savePath}");
+
                 return data;
+            }
 
             if (TryLoadFile(_backupPath, out data))
             {
                 RestoreBackup();
+
+                Debug.LogWarning(
+                    $"[BACKUP LOAD SUCCESS]\n" +
+                    $"Backup Location: {_backupPath}");
+
                 return data;
             }
 
@@ -86,9 +118,16 @@ namespace FinitePrizePool.Persistence
 
             if (saveExists || backupExists)
             {
+                Debug.LogError(
+                    "[LOAD FAILED] Save file and backup could not be loaded.");
+
                 throw new InvalidDataException(
                     "The save file and backup could not be loaded.");
             }
+
+            Debug.Log(
+                "[LOAD INFO] No existing save file. " +
+                "A new save will be created when the game saves.");
 
             return null;
         }
@@ -132,12 +171,20 @@ namespace FinitePrizePool.Persistence
                     return;
 
                 File.Copy(_backupPath, _savePath, true);
+
+                Debug.Log(
+                    $"[BACKUP RESTORED]\n" +
+                    $"JSON Location: {_savePath}");
             }
-            catch (IOException)
+            catch (IOException ex)
             {
+                Debug.LogWarning(
+                    $"[BACKUP RESTORE FAILED] {ex.Message}");
             }
-            catch (UnauthorizedAccessException)
+            catch (UnauthorizedAccessException ex)
             {
+                Debug.LogWarning(
+                    $"[BACKUP RESTORE FAILED] {ex.Message}");
             }
         }
     }
